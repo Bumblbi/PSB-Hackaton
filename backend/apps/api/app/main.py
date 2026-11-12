@@ -2,14 +2,15 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 from threading import Lock, RLock
+from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -17,7 +18,6 @@ from adapters.ingest import ingest_manifest
 from adapters.search.offline_index import OfflineIndex
 from adapters.storage.database import (
     ActiveCorpusRow,
-    Base,
     ChatRow,
     ChunkRow,
     CitationRow,
@@ -29,6 +29,7 @@ from adapters.storage.database import (
     persist_corpus,
     utcnow,
 )
+from adapters.storage.migrations import upgrade_database
 from packages.legal_core.models import Answer, Corpus, Message, Question
 from packages.legal_core.orchestrator import Orchestrator
 from packages.legal_core.ports import ProviderUnavailable
@@ -56,8 +57,7 @@ def create_app(settings: Settings | None = None, *, llm=None, corpus: Corpus | N
 
     @asynccontextmanager
     async def lifespan(app):
-        # Schema creation for embedded development/tests. Docker applies Alembic first.
-        Base.metadata.create_all(engine)
+        upgrade_database(engine)
         with Session(engine) as session, session.begin():
             initial = corpus
             if initial is None and settings.index_path and session.get(ActiveCorpusRow, 1) is None:
@@ -121,6 +121,63 @@ def create_app(settings: Settings | None = None, *, llm=None, corpus: Corpus | N
             session.add(chat)
             session.flush()
             return {"chat_id": chat.id}
+
+    @app.get("/api/v1/chats")
+    def list_chats(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
+        with Session(engine) as session:
+            last_message = func.max(MessageRow.created_at)
+            rows = session.execute(
+                select(ChatRow, func.count(MessageRow.id), last_message)
+                .outerjoin(MessageRow, MessageRow.chat_id == ChatRow.id)
+                .group_by(ChatRow.id)
+                .order_by(func.coalesce(last_message, ChatRow.created_at).desc(), ChatRow.id)
+                .limit(limit)
+                .offset(offset)
+            ).all()
+            return {
+                "items": [
+                    {
+                        "chat_id": chat.id,
+                        "title": chat.title,
+                        "created_at": chat.created_at,
+                        "last_message_at": last,
+                        "message_count": count,
+                    }
+                    for chat, count, last in rows
+                ],
+                "total": session.scalar(select(func.count()).select_from(ChatRow)),
+            }
+
+    @app.get("/api/v1/documents")
+    def list_documents(
+        q: str = Query("", max_length=200),
+        kind: Literal["law", "contract", "internal", "amendment"] | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+    ):
+        with state_lock:
+            versions = app.state.index.corpus.versions
+            selected = sorted(
+                (
+                    version
+                    for version in versions
+                    if (kind is None or version.kind == kind)
+                    and q.strip().casefold() in version.title.casefold()
+                ),
+                key=lambda version: (version.title.casefold(), version.revision),
+            )
+            return {
+                "items": [
+                    {
+                        key: value
+                        for key, value in version.model_dump(mode="json").items()
+                        if key != "chunks"
+                    }
+                    | {"chunk_count": len(version.chunks)}
+                    for version in selected[offset : offset + limit]
+                ],
+                "total": len(selected),
+            }
 
     @app.get("/api/v1/chats/{chat_id}")
     def get_chat(chat_id: UUID):

@@ -5,6 +5,7 @@ COPY requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 COPY . .
 RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /app/data/db \
     && python -m scripts.build_index data/demo/manifest.json /app/data/index/corpus.json \
     && chown -R appuser:appuser /app
 USER appuser

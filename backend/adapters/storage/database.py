@@ -1,8 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     create_engine,
     event,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from packages.legal_core.models import Corpus
@@ -24,6 +26,9 @@ def utcnow():
 
 def new_id():
     return str(uuid4())
+
+
+JSON_DATA = JSON().with_variant(JSONB(), "postgresql")
 
 
 class Base(DeclarativeBase):
@@ -40,17 +45,20 @@ class DocumentRow(Base):
 class ActiveCorpusRow(Base):
     __tablename__ = "active_corpus"
     id: Mapped[int] = mapped_column(primary_key=True)
-    payload: Mapped[dict] = mapped_column(JSON)
+    payload: Mapped[dict] = mapped_column(JSON_DATA)
 
 
 class VersionRow(Base):
     __tablename__ = "document_versions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
-    valid_from: Mapped[datetime | None] = mapped_column(Date, nullable=True)
-    valid_to: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    valid_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    valid_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    revision: Mapped[str] = mapped_column(String(200), server_default="")
+    source_name: Mapped[str] = mapped_column(Text, server_default="")
+    is_current_only: Mapped[bool] = mapped_column(Boolean, server_default="false")
     source_hash: Mapped[str] = mapped_column(String(64), index=True)
-    payload: Mapped[dict] = mapped_column(JSON)
+    payload: Mapped[dict] = mapped_column(JSON_DATA)
 
 
 class ChunkRow(Base):
@@ -60,6 +68,8 @@ class ChunkRow(Base):
     ordinal: Mapped[int]
     locator: Mapped[str] = mapped_column(Text)
     text: Mapped[str] = mapped_column(Text)
+    page: Mapped[int | None] = mapped_column(nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(JSON_DATA, nullable=True)
 
 
 class DocumentLinkRow(Base):
@@ -85,7 +95,7 @@ class MessageRow(Base):
     ordinal: Mapped[int]
     role: Mapped[str] = mapped_column(String(20))
     content: Mapped[str] = mapped_column(Text)
-    answer_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    answer_payload: Mapped[dict | None] = mapped_column(JSON_DATA, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -105,7 +115,16 @@ class IngestRunRow(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20))
     corpus_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    stats_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    stats_json: Mapped[dict] = mapped_column(JSON_DATA, default=dict)
+
+
+class EvalRunRow(Base):
+    __tablename__ = "eval_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    test_id: Mapped[str] = mapped_column(String(200), index=True)
+    answer_status: Mapped[str] = mapped_column(String(40))
+    duration_ms: Mapped[float]
+    checks_json: Mapped[dict] = mapped_column(JSON_DATA, default=dict)
 
 
 Index("ix_versions_validity", VersionRow.document_id, VersionRow.valid_from)
@@ -141,6 +160,9 @@ def persist_corpus(session: Session, corpus: Corpus):
                 document_id=str(v.document_id),
                 valid_from=v.valid_from,
                 valid_to=v.valid_to,
+                revision=v.revision,
+                source_name=v.source_name,
+                is_current_only=v.is_current_only,
                 source_hash=v.source_hash,
                 payload=payload,
             )
@@ -154,6 +176,8 @@ def persist_corpus(session: Session, corpus: Corpus):
                     ordinal=c.ordinal,
                     locator=c.locator,
                     text=c.text,
+                    page=c.page,
+                    embedding=c.embedding,
                 )
             )
         if v.amends_document_id:

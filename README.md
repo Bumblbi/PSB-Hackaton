@@ -1,11 +1,40 @@
-# Юридический ассистент ПСБ — backend
+# Юридический ассистент ПСБ
 
 FastAPI API для закрытого корпуса: чаты, источники, импорт TXT/PDF/DOCX,
 выбор редакций на дату события, BM25 и общее RAG-ядро для API и offline runner.
+React + TypeScript frontend находится в `frontend/`, FastAPI — в `backend/`.
 Реализация по ТЗ версии 1.0 для Hack&Change 2026. В репозитории только
 синтетические примеры: они не являются нормативными актами или реальным корпусом банка.
 
-## Запуск
+## Запуск всего приложения
+
+Локальная рабочая БД — SQLite. Из корня проекта:
+
+```powershell
+if (-not (Test-Path backend/.env)) { Copy-Item backend/.env.example backend/.env }
+docker compose up --build -d
+```
+
+Интерфейс: http://127.0.0.1:8080. API: http://127.0.0.1:8000/docs.
+Корневой Compose поднимает frontend и API с постоянным SQLite volume.
+Это отдельное хранилище: локальный `backend/legal.db` автоматически в volume не переносится.
+Ключи и модель настраиваются в `backend/.env`, в браузер они не передаются.
+Пока `LLM_PROVIDER=disabled`, можно читать документы и историю; генерация
+честно сообщает о недоступности модели.
+
+Для фронтенда нужен Node.js 22.19+ и npm.
+Без Docker запустите API по инструкции ниже, затем во втором терминале:
+
+```powershell
+cd frontend
+npm.cmd ci
+npm.cmd run dev
+```
+
+Интерфейс: http://127.0.0.1:5173. На Linux/macOS используйте `npm`.
+Проверки и описание интерфейса — в [frontend/README.md](frontend/README.md).
+
+## Отдельный запуск бэкенда
 
 Весь бэкенд находится в `backend/`: код, тесты, данные примера, зависимости,
 миграции, Docker и `.env.example`. README и общие настройки Git/CI находятся в корне.
@@ -22,7 +51,7 @@ docker compose up --build -d
 API: http://localhost:8000, Swagger: http://localhost:8000/docs,
 OpenAPI: http://localhost:8000/openapi.json, проверка зависимостей: `/health`.
 Compose поднимает API и PostgreSQL 17 с постоянным volume, применяет Alembic.
-Порт API опубликован только на loopback. Frontend в этот backend-коммит не входит.
+Порт API опубликован только на loopback. Для frontend используйте корневой Compose или Vite, как описано выше.
 Redis не требуется и в health обозначается как disabled.
 
 По умолчанию `LLM_PROVIDER=disabled`: API, чаты и просмотр источников работают,
@@ -50,19 +79,55 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python -m scripts.build_index data/demo/manifest.json data/index/corpus.json
-.\.venv\Scripts\python -m alembic upgrade head
+.\.venv\Scripts\python -m scripts.init_db --manifest data/demo/manifest.json
 .\.venv\Scripts\python -m uvicorn apps.api.app.main:app --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
 По умолчанию локальная БД — SQLite `legal.db`. `DATABASE_URL` переключает SQLAlchemy
-на PostgreSQL. Alembic читает `DATABASE_URL` из окружения, API также читает `.env`.
-Схема создаётся автоматически при embedded-запуске; Docker и CI используют миграцию.
+на PostgreSQL. API, Alembic и команда инициализации читают одинаковый `DATABASE_URL` из `.env`
+и окружения (окружение имеет приоритет). При старте API применяет Alembic;
+уже применённые миграции повторно не выполняются. Docker и CI используют те же миграции.
 Используйте один API worker: активный индекс и блокировка переиндексации находятся в процессе.
+
+## База данных
+
+Инициализация из `backend/`:
+
+```powershell
+python -m scripts.init_db --manifest data/demo/manifest.json
+python -m alembic check
+```
+
+Команда создаёт/обновляет таблицы в настроенной БД. Для PostgreSQL сама база
+и пользователь должны уже существовать; Compose создаёт их автоматически.
+Без `--manifest` применяется только схема. Корпус загружается лишь в пустое
+хранилище: повторный запуск сохраняет действующий корпус и историю чатов.
+Для замены корпуса используйте существующую dev-переиндексацию.
+
+Для отдельного сервера PostgreSQL укажите в `.env`:
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://<user>:<url-encoded-password>@127.0.0.1:5432/<database>
+```
+
+Хранятся документы, редакции и сроки действия, связи с дополнениями, фрагменты,
+чаты, сообщения, цитаты, задания импорта и `eval_runs` для метрик оценки.
+У редакций есть отдельные `revision`, `source_name`, `source_hash`,
+`is_current_only`; имя и хеш источника относятся к конкретной редакции,
+чтобы разные файлы одного документа не теряли происхождение.
+Чанки сохраняют страницу и переданный embedding. Миграция `0002` переносит
+эти значения из существующих снимков, сохраняя ID, текст и ссылки.
+В PostgreSQL вспомогательные поля используют JSONB; в SQLite — JSON.
+`eval_runs` создаётся как хранилище для инструмента оценки; API не записывает
+в него пользовательские диалоги. Векторные значения хранятся в JSONB/JSON;
+pgvector и поиск по нему в этой реализации не включены.
 
 ## API для frontend
 
 | Метод и путь | Результат |
 | --- | --- |
+| `GET /api/v1/chats?limit=50&offset=0` | История диалогов, счётчики и пагинация |
+| `GET /api/v1/documents?q=...&kind=contract` | Редакции активного корпуса, поиск и пагинация |
 | `POST /api/v1/chats` `{title?}` | 201 `{chat_id}` |
 | `GET /api/v1/chats/{id}` | Чат и сохранённые сообщения с DTO ответа |
 | `POST /api/v1/chats/{id}/messages` | AnswerResponse |
@@ -187,7 +252,7 @@ CI проверяет тесты, формат, миграции, сборку Z
 
 Реальный корпус, ключ Groq и образец организаторов отсутствуют. Поэтому качество
 юридических ответов, 30 размеченных реальных кейсов, p50/p95 с моделью и leaderboard
-пока не измерены. Frontend, SSO/IAM, OCR, автоматический сбор законов и презентация
+пока не измерены. SSO/IAM, OCR, автоматический сбор законов и презентация
 не входят в этот backend. Без IAM запуск предназначен для локального демо.
 Перед командным деплоем нужны контроль доступа к чатам, TLS и политика хранения данных.
 
