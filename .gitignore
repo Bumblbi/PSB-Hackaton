@@ -7,7 +7,7 @@ __pycache__/
 *.db
 *.db-*
 .codebase-memory/
-data/raw/
-data/index/
-dist/
+backend/data/raw/
+backend/data/index/
+backend/dist/
 *.egg-info/

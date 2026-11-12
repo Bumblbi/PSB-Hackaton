@@ -7,9 +7,14 @@ FastAPI API для закрытого корпуса: чаты, источник
 
 ## Запуск
 
+Весь бэкенд находится в `backend/`: код, тесты, данные примера, зависимости,
+миграции, Docker и `.env.example`. README и общие настройки Git/CI находятся в корне.
+Все команды ниже выполняются из `backend/`.
+
 Python 3.12, Docker Engine и Docker Compose. Из корня репозитория:
 
 ```sh
+cd backend
 cp .env.example .env
 docker compose up --build -d
 ```
@@ -37,9 +42,11 @@ GROQ_API_KEY=<ваш ключ>
 `POST {base_url}/chat/completions`; фактический API надо сверить с регламентом.
 Groq не используется автоматически для evaluator.
 
-Локальный запуск без Docker (PowerShell; на Linux используйте `.venv/bin/python`):
+Локальный запуск без Docker (PowerShell, из корня репозитория;
+на Linux используйте `.venv/bin/python`):
 
 ```powershell
+cd backend
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python -m scripts.build_index data/demo/manifest.json data/index/corpus.json
