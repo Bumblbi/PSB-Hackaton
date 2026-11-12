@@ -1,0 +1,21 @@
+{
+  "documents": [
+    {
+      "key": "synthetic-service-contract",
+      "path": "contract.txt",
+      "title": "СИНТЕТИЧЕСКИЙ ПРИМЕР Договор сопровождения",
+      "kind": "contract",
+      "revision": "demo-1",
+      "valid_from": "2020-01-01"
+    },
+    {
+      "key": "synthetic-service-amendment",
+      "path": "amendment.txt",
+      "title": "СИНТЕТИЧЕСКИЙ ПРИМЕР Дополнение к договору сопровождения",
+      "kind": "amendment",
+      "revision": "demo-1",
+      "valid_from": "2025-01-01",
+      "amends_key": "synthetic-service-contract"
+    }
+  ]
+}
