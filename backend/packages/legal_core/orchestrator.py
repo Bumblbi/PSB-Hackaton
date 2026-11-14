@@ -107,7 +107,7 @@ class Orchestrator:
         for claim in draft.claims:
             for cite in claim.citations:
                 chunk = by_id.get(cite.chunk_id)
-                if chunk is None or cite.quote not in chunk.text:
+                if chunk is None or not cite.quote.strip() or cite.quote not in chunk.text:
                     return finish(
                         Status.INSUFFICIENT_EVIDENCE,
                         "Проверка цитат не пройдена. Ответ не подтверждён корпусом.",

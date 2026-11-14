@@ -38,6 +38,8 @@ class OfflineIndex:
         temporary.replace(path)
 
     def search(self, query: str, limit: int = 20) -> list[Chunk]:
+        if limit <= 0:
+            return []
         query_terms = set(tokens(query))
         scores = []
         count = len(self.chunks)
@@ -56,7 +58,8 @@ class OfflineIndex:
                     )
             if score > 0:
                 scores.append((i, score))
-        ranked = sorted(scores, key=lambda row: (-row[1], row[0]))[:20]
+        candidate_limit = max(20, limit)
+        ranked = sorted(scores, key=lambda row: (-row[1], row[0]))[:candidate_limit]
         fused = {i: 1 / (60 + rank) for rank, (i, _) in enumerate(ranked, 1)}
         if self.embed_query and self.corpus.embedding_model:
             try:
@@ -72,7 +75,9 @@ class OfflineIndex:
                         norm * other_norm, 1e-12
                     )
                     vector_scores.append((i, score))
-            for rank, (i, _) in enumerate(sorted(vector_scores, key=lambda x: -x[1])[:20], 1):
+            for rank, (i, _) in enumerate(
+                sorted(vector_scores, key=lambda x: -x[1])[:candidate_limit], 1
+            ):
                 fused[i] = fused.get(i, 0) + 1 / (60 + rank)
         return [self.chunks[i] for i in sorted(fused, key=lambda i: (-fused[i], i))[:limit]]
 

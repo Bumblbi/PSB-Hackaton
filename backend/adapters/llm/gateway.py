@@ -1,4 +1,5 @@
 import json
+import logging
 
 import httpx
 
@@ -94,7 +95,12 @@ class CompatibleGateway:
                 if not isinstance(parsed, dict):
                     raise TypeError("expected object")
                 return validate(parsed)
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                logging.getLogger(__name__).warning(
+                    "LLM transport failure type=%s status=%s",
+                    type(exc).__name__,
+                    exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None,
+                )
                 raise ProviderUnavailable("LLM request failed") from None
             except (ValueError, KeyError, IndexError, TypeError):
                 if attempt:
