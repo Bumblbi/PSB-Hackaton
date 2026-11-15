@@ -1,4 +1,13 @@
 export type Kind = 'law' | 'contract' | 'internal' | 'amendment';
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+}
+export interface UserSession {
+  user: User;
+  csrf_token: string;
+}
 export type AnswerStatus =
   | 'ANSWERED'
   | 'PARTIAL'

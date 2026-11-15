@@ -6,7 +6,7 @@ import '@fontsource/ibm-plex-sans/cyrillic-600.css';
 import '@fontsource/ibm-plex-sans/latin-400.css';
 import '@fontsource/ibm-plex-sans/latin-500.css';
 import '@fontsource/ibm-plex-sans/latin-600.css';
-import App from './App';
+import AuthApp from './AuthApp';
 import './styles.css';
 
 class ErrorBoundary extends React.Component<React.PropsWithChildren, { failed: boolean }> {
@@ -29,7 +29,7 @@ class ErrorBoundary extends React.Component<React.PropsWithChildren, { failed: b
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <App />
+      <AuthApp />
     </ErrorBoundary>
   </React.StrictMode>,
 );

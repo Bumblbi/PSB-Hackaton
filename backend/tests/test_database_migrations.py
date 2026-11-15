@@ -3,7 +3,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from conftest import EvidenceLLM
+from conftest import EvidenceLLM, authenticate
 from fastapi.testclient import TestClient
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
@@ -93,6 +93,7 @@ def test_alembic_uses_same_dotenv_database_as_api(tmp_path, monkeypatch):
 def test_api_restart_preserves_chat_and_citations(corpus, tmp_path):
     settings = Settings(_env_file=None, database_url=f"sqlite:///{tmp_path / 'api.db'}")
     with TestClient(create_app(settings, corpus=corpus, llm=EvidenceLLM())) as client:
+        authenticate(client)
         chat_id = client.post("/api/v1/chats", json={}).json()["chat_id"]
         response = client.post(
             f"/api/v1/chats/{chat_id}/messages",
@@ -102,6 +103,7 @@ def test_api_restart_preserves_chat_and_citations(corpus, tmp_path):
         answer = response.json()
         assert answer["citations"]
     with TestClient(create_app(settings, llm=EvidenceLLM())) as client:
+        authenticate(client)
         assert client.get("/health").json()["db"] == "ok"
         stored = client.get(f"/api/v1/chats/{chat_id}").json()["messages"]
         assert stored[-1]["answer"] == answer
@@ -110,4 +112,34 @@ def test_api_restart_preserves_chat_and_citations(corpus, tmp_path):
         assert citation["quote"] in source["text"]
         with client.app.state.engine.connect() as connection:
             assert connection.execute(text("PRAGMA foreign_key_check")).all() == []
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0002"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0003"
+
+
+def test_auth_migration_preserves_anonymous_chat_messages(tmp_path):
+    engine = make_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
+    cfg = config()
+    with engine.begin() as connection:
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "0002")
+        connection.execute(
+            text(
+                "INSERT INTO chats(id,title,created_at) VALUES "
+                "('old-chat','Старый диалог','2026-01-01 00:00:00')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO messages(id,chat_id,ordinal,role,content,created_at) "
+                "VALUES ('old-message','old-chat',0,'user','Старый вопрос',"
+                "'2026-01-01 00:00:00')"
+            )
+        )
+    upgrade_database(engine)
+    with engine.connect() as connection:
+        assert (
+            connection.scalar(text("SELECT content FROM messages WHERE id='old-message'"))
+            == "Старый вопрос"
+        )
+        assert connection.scalar(text("SELECT owner_id FROM chats WHERE id='old-chat'")) is None
+        assert connection.execute(text("PRAGMA foreign_key_check")).all() == []
+    engine.dispose()

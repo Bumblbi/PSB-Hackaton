@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Model(BaseModel):
@@ -93,11 +93,12 @@ class Question(Model):
     document_kind: Literal["law", "contract", "internal", "amendment"] | None = None
     history: list[Message] = Field(default_factory=list, max_length=20)
 
-    @model_validator(mode="after")
-    def not_blank(self):
-        if not self.question.strip():
+    @field_validator("question")
+    @classmethod
+    def not_blank(cls, value):
+        if not value.strip():
             raise ValueError("question must not be blank")
-        return self
+        return value
 
 
 class DraftCitation(Model):

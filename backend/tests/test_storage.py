@@ -1,6 +1,6 @@
 import json
 
-from conftest import EvidenceLLM
+from conftest import EvidenceLLM, authenticate
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy import select
@@ -15,6 +15,7 @@ from packages.legal_core.models import Corpus
 def test_reindex_archives_sources_but_replaces_active_corpus(corpus, tmp_path):
     settings = Settings(_env_file=None, database_url=f"sqlite:///{tmp_path / 'test.db'}")
     with TestClient(create_app(settings, corpus=corpus, llm=EvidenceLLM())) as client:
+        authenticate(client)
         engine = client.app.state.engine
         with Session(engine) as session, session.begin():
             persist_corpus(session, Corpus(versions=[corpus.versions[0]]))
@@ -53,6 +54,7 @@ def test_admin_reindex_and_restart_persist_active(corpus, tmp_path):
     )
     headers = {"X-Admin-Token": "test-admin"}
     with TestClient(create_app(settings, corpus=corpus, llm=EvidenceLLM())) as client:
+        authenticate(client)
         assert (
             client.post("/api/v1/admin/reindex", json={"corpus_path": "manifest.json"}).status_code
             == 403
@@ -78,6 +80,7 @@ def test_admin_reindex_and_restart_persist_active(corpus, tmp_path):
     OfflineIndex(corpus).save(index_path)
     settings = settings.model_copy(update={"index_path": index_path})
     with TestClient(create_app(settings, llm=EvidenceLLM())) as client:
+        authenticate(client)
         assert client.get("/health").json()["chunks"] == 1
 
 
@@ -92,6 +95,7 @@ def test_failed_reindex_keeps_active_snapshot(corpus, tmp_path):
     )
     headers = {"X-Admin-Token": "test-admin"}
     with TestClient(create_app(settings, corpus=corpus, llm=EvidenceLLM())) as client:
+        authenticate(client)
         before = client.get("/health").json()["index_version"]
         result = client.post(
             "/api/v1/admin/reindex", headers=headers, json={"corpus_path": "bad.json"}

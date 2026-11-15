@@ -80,9 +80,36 @@ class DocumentLinkRow(Base):
     relation_type: Mapped[str] = mapped_column(String(30), default="amendment")
 
 
+class UserRow(Base):
+    __tablename__ = "users"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    email: Mapped[str] = mapped_column(String(254), unique=True)
+    name: Mapped[str] = mapped_column(String(100))
+    password_hash: Mapped[str] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AuthSessionRow(Base):
+    __tablename__ = "auth_sessions"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AuthThrottleRow(Base):
+    __tablename__ = "auth_throttle"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_start: Mapped[int]
+    attempts: Mapped[int]
+
+
 class ChatRow(Base):
     __tablename__ = "chats"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), index=True)
     title: Mapped[str] = mapped_column(String(200), default="Новый чат")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

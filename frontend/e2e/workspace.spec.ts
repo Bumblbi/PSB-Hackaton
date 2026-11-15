@@ -1,5 +1,18 @@
 import { expect, test, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { randomUUID } from 'node:crypto';
+
+test.beforeEach(async ({ page }) => {
+  const response = await page.request.post('/api/v1/auth/register', {
+    headers: { 'X-Requested-With': 'legal-workspace' },
+    data: {
+      name: 'Тестовый юрист',
+      email: `workspace.${randomUUID()}@example.com`,
+      password: 'test password phrase 2026',
+    },
+  });
+  expect(response.status()).toBe(201);
+});
 
 async function ask(page: Page) {
   await page.goto('/');
@@ -158,4 +171,35 @@ test('captures three review views', async ({ page }) => {
   await page.screenshot({ path: 'test-results/review-evidence.png' });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: 'test-results/review-mobile.png' });
+});
+
+test('opens the context and highlights a date rejected by the server', async ({ page }) => {
+  await page.route('**/api/v1/chats/*/messages', (route) =>
+    route.fulfill({
+      status: 422,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        detail: 'Исправьте указанные поля',
+        errors: [
+          {
+            field: 'event_date',
+            message: 'Укажите дату события в формате ГГГГ-ММ-ДД',
+          },
+        ],
+      }),
+    }),
+  );
+  await page.goto('/');
+  await page.getByLabel('Юридический вопрос').fill('Срок оплаты по договору');
+  await page.getByRole('button', { name: 'Отправить вопрос' }).click();
+  await expect(page.getByLabel('Дата события', { exact: true })).toHaveAttribute(
+    'aria-invalid',
+    'true',
+  );
+  await expect(page.getByLabel('Дата события', { exact: true })).toBeFocused();
+  await expect(page.locator('#composer-event_date-error')).toContainText('ГГГГ-ММ-ДД');
+  await expect(page.getByRole('alert')).not.toContainText('выбранный документ');
+  await expect(page.getByLabel('Юридический вопрос')).toHaveValue('Срок оплаты по договору');
+  await page.getByLabel('Дата события', { exact: true }).fill('2024-01-01');
+  await expect(page.locator('#composer-event_date-error')).toHaveCount(0);
 });

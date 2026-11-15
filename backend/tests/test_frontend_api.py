@@ -1,4 +1,4 @@
-from conftest import EvidenceLLM
+from conftest import EvidenceLLM, authenticate
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,7 @@ from packages.legal_core.models import Corpus
 def test_history_pagination_and_message_counts(corpus, tmp_path):
     settings = Settings(_env_file=None, database_url=f"sqlite:///{tmp_path / 'history.db'}")
     with TestClient(create_app(settings, corpus=corpus, llm=EvidenceLLM())) as client:
+        authenticate(client)
         first = client.post("/api/v1/chats", json={"title": "Первый вопрос"}).json()["chat_id"]
         second = client.post("/api/v1/chats", json={"title": "Второй вопрос"}).json()["chat_id"]
         assert client.get("/api/v1/chats").json()["items"][0]["chat_id"] == second
@@ -29,6 +30,7 @@ def test_history_pagination_and_message_counts(corpus, tmp_path):
 def test_document_library_filters_active_versions(corpus, tmp_path):
     settings = Settings(_env_file=None, database_url=f"sqlite:///{tmp_path / 'sources.db'}")
     with TestClient(create_app(settings, corpus=corpus, llm=EvidenceLLM())) as client:
+        authenticate(client)
         page = client.get("/api/v1/documents").json()
         assert page["total"] == 2
         assert all("chunks" not in item for item in page["items"])
@@ -51,6 +53,7 @@ def test_document_library_filters_active_versions(corpus, tmp_path):
         with Session(client.app.state.engine) as session, session.begin():
             persist_corpus(session, Corpus(versions=[corpus.versions[0]]))
     with TestClient(create_app(settings, llm=EvidenceLLM())) as client:
+        authenticate(client)
         assert client.get("/api/v1/documents").json()["total"] == 1
         assert (
             client.get(

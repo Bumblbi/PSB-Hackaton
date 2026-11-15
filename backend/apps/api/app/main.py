@@ -5,7 +5,7 @@ from threading import Lock, RLock
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -34,8 +34,10 @@ from packages.legal_core.models import Answer, Corpus, Message, Question
 from packages.legal_core.orchestrator import Orchestrator
 from packages.legal_core.ports import ProviderUnavailable
 
+from .auth import build_auth
 from .factory import gateway
 from .settings import Settings
+from .validation import FieldValidationError, field_error_response, request_field_errors
 
 logger = logging.getLogger("legal_api")
 
@@ -72,17 +74,39 @@ def create_app(settings: Settings | None = None, *, llm=None, corpus: Corpus | N
         engine.dispose()
 
     app = FastAPI(title="ПСБ Юридический ассистент", version="0.1.0", lifespan=lifespan)
+    auth_router, require_user = build_auth(engine, settings)
+    app.include_router(auth_router)
+    authenticated_user = Depends(require_user)
+    protected = [authenticated_user]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type", "X-Admin-Token"],
+        allow_credentials=True,
+        allow_headers=["Content-Type", "X-Admin-Token", "X-CSRF-Token", "X-Requested-With"],
     )
+
+    @app.middleware("http")
+    async def security_headers(request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "same-origin"
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request, exc):
-        # FastAPI's default errors echo input; never echo chat text or credentials.
-        return JSONResponse(status_code=422, content={"detail": "Некорректный формат запроса."})
+        return field_error_response(
+            request_field_errors(
+                exc.errors(),
+                registration=request.url.path == "/api/v1/auth/register",
+            )
+        )
+
+    @app.exception_handler(FieldValidationError)
+    async def invalid_fields(request, exc):
+        return field_error_response(exc.errors, exc.status_code, exc.detail)
 
     @app.exception_handler(ProviderUnavailable)
     async def provider_error(request, exc):
@@ -115,20 +139,25 @@ def create_app(settings: Settings | None = None, *, llm=None, corpus: Corpus | N
             }
 
     @app.post("/api/v1/chats", status_code=201)
-    def create_chat(body: ChatInput):
+    def create_chat(body: ChatInput, user=authenticated_user):
         with Session(engine) as session, session.begin():
-            chat = ChatRow(title=body.title)
+            chat = ChatRow(title=body.title, owner_id=user.id)
             session.add(chat)
             session.flush()
             return {"chat_id": chat.id}
 
     @app.get("/api/v1/chats")
-    def list_chats(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
+    def list_chats(
+        limit: int = Query(50, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        user=authenticated_user,
+    ):
         with Session(engine) as session:
             last_message = func.max(MessageRow.created_at)
             rows = session.execute(
                 select(ChatRow, func.count(MessageRow.id), last_message)
                 .outerjoin(MessageRow, MessageRow.chat_id == ChatRow.id)
+                .where(ChatRow.owner_id == user.id)
                 .group_by(ChatRow.id)
                 .order_by(func.coalesce(last_message, ChatRow.created_at).desc(), ChatRow.id)
                 .limit(limit)
@@ -145,10 +174,12 @@ def create_app(settings: Settings | None = None, *, llm=None, corpus: Corpus | N
                     }
                     for chat, count, last in rows
                 ],
-                "total": session.scalar(select(func.count()).select_from(ChatRow)),
+                "total": session.scalar(
+                    select(func.count()).select_from(ChatRow).where(ChatRow.owner_id == user.id)
+                ),
             }
 
-    @app.get("/api/v1/documents")
+    @app.get("/api/v1/documents", dependencies=protected)
     def list_documents(
         q: str = Query("", max_length=200),
         kind: Literal["law", "contract", "internal", "amendment"] | None = None,
@@ -180,10 +211,10 @@ def create_app(settings: Settings | None = None, *, llm=None, corpus: Corpus | N
             }
 
     @app.get("/api/v1/chats/{chat_id}")
-    def get_chat(chat_id: UUID):
+    def get_chat(chat_id: UUID, user=authenticated_user):
         with Session(engine) as session:
             chat = session.get(ChatRow, str(chat_id))
-            if not chat:
+            if not chat or chat.owner_id != user.id:
                 raise HTTPException(404, "Chat not found")
             messages = session.scalars(
                 select(MessageRow)
@@ -206,10 +237,12 @@ def create_app(settings: Settings | None = None, *, llm=None, corpus: Corpus | N
             }
 
     @app.post("/api/v1/chats/{chat_id}/messages", response_model=Answer)
-    def send_message(chat_id: UUID, body: Question):
+    def send_message(chat_id: UUID, body: Question, user=authenticated_user):
         with chat_lock, Session(engine) as session, session.begin():
             chat = session.scalar(
-                select(ChatRow).where(ChatRow.id == str(chat_id)).with_for_update()
+                select(ChatRow)
+                .where(ChatRow.id == str(chat_id), ChatRow.owner_id == user.id)
+                .with_for_update()
             )
             if chat is None:
                 raise HTTPException(404, "Chat not found")
@@ -278,7 +311,7 @@ def create_app(settings: Settings | None = None, *, llm=None, corpus: Corpus | N
             )
             return answer
 
-    @app.get("/api/v1/documents/{document_id}")
+    @app.get("/api/v1/documents/{document_id}", dependencies=protected)
     def get_document(document_id: UUID, version_id: UUID | None = None):
         with Session(engine) as session:
             rows = session.scalars(
@@ -299,7 +332,7 @@ def create_app(settings: Settings | None = None, *, llm=None, corpus: Corpus | N
                 "sections": payload["chunks"],
             }
 
-    @app.get("/api/v1/chunks/{chunk_id}")
+    @app.get("/api/v1/chunks/{chunk_id}", dependencies=protected)
     def get_chunk(chunk_id: UUID):
         with Session(engine) as session:
             row = session.get(ChunkRow, str(chunk_id))
@@ -351,7 +384,7 @@ def create_app(settings: Settings | None = None, *, llm=None, corpus: Corpus | N
         finally:
             reindex_lock.release()
 
-    @app.post("/api/v1/admin/reindex", status_code=202)
+    @app.post("/api/v1/admin/reindex", status_code=202, dependencies=protected)
     def reindex(
         body: ReindexInput, tasks: BackgroundTasks, x_admin_token: str | None = Header(default=None)
     ):
@@ -376,7 +409,7 @@ def create_app(settings: Settings | None = None, *, llm=None, corpus: Corpus | N
         tasks.add_task(rebuild, job_id, manifest)
         return {"job_id": job_id}
 
-    @app.get("/api/v1/admin/reindex/{job_id}")
+    @app.get("/api/v1/admin/reindex/{job_id}", dependencies=protected)
     def reindex_status(job_id: UUID, x_admin_token: str | None = Header(default=None)):
         require_admin(x_admin_token)
         with Session(engine) as session:

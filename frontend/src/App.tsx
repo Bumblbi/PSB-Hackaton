@@ -30,7 +30,14 @@ import type {
   Health,
   Kind,
   QuestionInput,
+  User,
 } from './types';
+import FieldError, {
+  errorsByField,
+  fieldAccessibility,
+  focusFirstError,
+  type FieldErrors,
+} from './components/FieldError';
 
 function currentRoute() {
   return window.location.hash.slice(1) || '/new';
@@ -56,7 +63,15 @@ const examples = [
   },
 ];
 
-export default function App() {
+export default function App({
+  user,
+  onLogout,
+  onPassword,
+}: {
+  user: User;
+  onLogout: () => void;
+  onPassword: () => void;
+}) {
   const [route, setRoute] = useState(currentRoute);
   const [health, setHealth] = useState<Health | null>(null);
   const [connectionError, setConnectionError] = useState(false);
@@ -79,6 +94,15 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [pending, setPending] = useState('');
   const [sendError, setSendError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  function clearField(field: string) {
+    setFieldErrors((previous) => {
+      const next = { ...previous };
+      delete next[field];
+      return next;
+    });
+    setSendError('');
+  }
   const [reload, setReload] = useState(0);
   const sendingRef = useRef(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -134,6 +158,7 @@ export default function App() {
     setChatError('');
     setSendError('');
     setPending('');
+    setFieldErrors({});
     if (!chatId) {
       setChatLoading(false);
       return () => controller.abort();
@@ -230,15 +255,18 @@ export default function App() {
   }
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
     const question = draft.trim();
     if (!question || sendingRef.current || chatLoading || chatError || question.length > 8000)
       return;
     sendingRef.current = true;
     setSending(true);
     setSendError('');
+    setFieldErrors({});
     setPending(question);
     ++sequence.current;
     let targetId = chatId;
+    let failedFields: FieldErrors = {};
     try {
       if (!targetId) {
         targetId = (await api.createChat(question.slice(0, 200))).chat_id;
@@ -255,6 +283,10 @@ export default function App() {
       setPending('');
     } catch (error) {
       setSendError(errorText(error));
+      const fields = errorsByField(error);
+      failedFields = fields;
+      setFieldErrors(fields);
+      if (fields.event_date || fields.document_kind) setFiltersOpen(true);
       setPending('');
       if (targetId) {
         try {
@@ -269,7 +301,9 @@ export default function App() {
       setChatLoading(false);
       void refreshChats();
       void refreshHealth();
-      window.setTimeout(() => textarea.current?.focus(), 0);
+      window.requestAnimationFrame(() => {
+        if (!focusFirstError(form, failedFields)) textarea.current?.focus();
+      });
     }
   }
   const hasMessages = (chat?.messages.length ?? 0) > 0 || !!pending;
@@ -413,11 +447,20 @@ export default function App() {
             Как работать с ассистентом
           </button>
           <div className="workspace-identity">
-            <span className="identity-monogram">Ю</span>
+            <span className="identity-monogram">{user.name.slice(0, 1).toUpperCase()}</span>
             <div>
-              Рабочее место юриста<span>Локальная версия</span>
+              {user.name}
+              <span>{user.email}</span>
             </div>
             <span className="identity-dot" aria-hidden="true" />
+          </div>
+          <div className="account-actions">
+            <button onClick={onPassword} disabled={sending}>
+              Изменить пароль
+            </button>
+            <button onClick={onLogout} disabled={sending}>
+              Выйти
+            </button>
           </div>
         </div>
       </aside>
@@ -623,6 +666,7 @@ export default function App() {
                           <button
                             type="button"
                             aria-label="Убрать документ из контекста"
+                            name="document_id"
                             disabled={sending}
                             onClick={() => setContext(null)}
                           >
@@ -664,13 +708,17 @@ export default function App() {
                   </label>
                   <textarea
                     id="question"
+                    name="question"
                     ref={textarea}
                     placeholder="Опишите вопрос, договор или ситуацию…"
                     value={draft}
                     maxLength={8000}
                     rows={3}
                     disabled={sending || !!chatError || chatLoading}
-                    onChange={(e) => setDraft(e.target.value)}
+                    onChange={(e) => {
+                      setDraft(e.target.value);
+                      clearField('question');
+                    }}
                     onKeyDown={(event) => {
                       if (
                         event.key === 'Enter' &&
@@ -682,26 +730,43 @@ export default function App() {
                         event.currentTarget.form?.requestSubmit();
                       }
                     }}
-                    aria-describedby="composer-help"
+                    {...fieldAccessibility(fieldErrors, 'question', 'composer')}
+                    aria-describedby={
+                      fieldErrors.question ? 'composer-question-error' : 'composer-help'
+                    }
                   />
+                  <FieldError errors={fieldErrors} field="question" prefix="composer" />
+                  <FieldError errors={fieldErrors} field="document_id" prefix="composer" />
                   {filtersOpen && (
                     <div className="composer-filters">
                       <label>
                         <span>Дата события</span>
                         <input
                           type="date"
+                          name="event_date"
+                          aria-label="Дата события"
                           value={eventDate}
                           disabled={sending}
-                          onChange={(e) => setEventDate(e.target.value)}
+                          {...fieldAccessibility(fieldErrors, 'event_date', 'composer')}
+                          onChange={(e) => {
+                            setEventDate(e.target.value);
+                            clearField('event_date');
+                          }}
                         />
+                        <FieldError errors={fieldErrors} field="event_date" prefix="composer" />
                       </label>
                       <label>
                         <span>Тип документа</span>
                         <select
                           aria-label="Тип документа"
+                          name="document_kind"
                           value={kind}
                           disabled={sending || !!context}
-                          onChange={(e) => setKind(e.target.value as Kind | '')}
+                          {...fieldAccessibility(fieldErrors, 'document_kind', 'composer')}
+                          onChange={(e) => {
+                            setKind(e.target.value as Kind | '');
+                            clearField('document_kind');
+                          }}
                         >
                           <option value="">Все документы</option>
                           {Object.entries(kinds).map(([key, label]) => (
@@ -710,6 +775,7 @@ export default function App() {
                             </option>
                           ))}
                         </select>
+                        <FieldError errors={fieldErrors} field="document_kind" prefix="composer" />
                       </label>
                       <p>Дата помогает выбрать применимую редакцию</p>
                     </div>

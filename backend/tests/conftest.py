@@ -52,3 +52,14 @@ class EvidenceLLM:
 
     def verify(self, claims, evidence):
         return [self.supported] * len(claims)
+
+
+def authenticate(client):
+    """Exercise real registration/login before testing authenticated application routes."""
+    client.headers["X-Requested-With"] = "legal-workspace"
+    credentials = {"email": "fixture@example.com", "password": "fixture password phrase 2026"}
+    response = client.post("/api/v1/auth/register", json={"name": "Тестовый юрист", **credentials})
+    if response.status_code == 409:
+        response = client.post("/api/v1/auth/login", json=credentials)
+    assert response.status_code in {200, 201}, response.text
+    client.headers["X-CSRF-Token"] = response.json()["csrf_token"]

@@ -12,10 +12,16 @@ class Settings(BaseSettings):
     corpus_root: Path = Path("data/raw")
     app_env: Literal["development", "public"] = "public"
     admin_token: SecretStr = SecretStr("")
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"]
+    )
     llm_provider: Literal["disabled", "groq", "organizer"] = "disabled"
     llm_model: str = ""
     groq_api_key: SecretStr = SecretStr("")
     organizer_api_key: SecretStr = SecretStr("")
     organizer_base_url: str = ""
     llm_timeout: float = Field(default=45, gt=0, le=120)
+    auth_cookie_secure: bool = False
+    auth_session_hours: int = Field(default=8, ge=1, le=24)
+    auth_idle_minutes: int = Field(default=30, ge=5, le=120)
+    auth_trusted_origins: list[str] = Field(default_factory=list)

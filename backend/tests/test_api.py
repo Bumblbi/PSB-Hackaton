@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 import pytest
-from conftest import EvidenceLLM
+from conftest import EvidenceLLM, authenticate
 from fastapi.testclient import TestClient
 
 from apps.api.app.main import create_app
@@ -12,6 +12,7 @@ from apps.api.app.settings import Settings
 def client(corpus, tmp_path):
     settings = Settings(_env_file=None, database_url=f"sqlite:///{tmp_path / 'test.db'}")
     with TestClient(create_app(settings, corpus=corpus, llm=EvidenceLLM())) as client:
+        authenticate(client)
         yield client
 
 
@@ -63,6 +64,7 @@ def test_admin_public_disabled(client):
 def test_provider_unconfigured_rollback(corpus, tmp_path):
     settings = Settings(_env_file=None, database_url=f"sqlite:///{tmp_path / 'test.db'}")
     with TestClient(create_app(settings, corpus=corpus)) as client:
+        authenticate(client)
         chat_id = client.post("/api/v1/chats", json={}).json()["chat_id"]
         response = client.post(
             f"/api/v1/chats/{chat_id}/messages", json={"question": "срок оплаты"}
